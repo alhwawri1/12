@@ -1,0 +1,78 @@
+workflows:
+  masareef-unsigned-ipa:
+    name: Masareef Unsigned IPA & Widget Build
+    max_build_duration: 60
+    instance_type: mac_mini_m2
+    environment:
+      vars:
+        APP_GROUP_ID: "group.com.alhawari.masareef"
+        BUNDLE_ID: "com.alhawari.masareef"
+        WIDGET_BUNDLE_ID: "com.alhawari.masareef.widget"
+        CI: "true"
+      node: 20.18.0
+      xcode: latest
+    scripts:
+      - name: Install dependencies & sync Capacitor iOS
+        script: |
+          set -e
+          export CI=true
+          npm install --no-audit --no-fund --prefer-offline || npm install --no-audit --no-fund --legacy-peer-deps
+          CAP_BIN="./node_modules/.bin/cap"
+          if [ ! -x "$CAP_BIN" ]; then
+            echo "Capacitor CLI binary not found in node_modules/.bin/cap"
+            exit 1
+          fi
+          rm -rf ios
+          "$CAP_BIN" add ios
+          if [ -f "ios/App/Podfile" ] && command -v pod >/dev/null 2>&1; then
+            (cd ios/App && pod install || true)
+          fi
+          "$CAP_BIN" copy ios
+          "$CAP_BIN" update ios || true
+      - name: Attach MasareefWidget extension & App Group to Xcode project
+        script: |
+          set -e
+          node scripts/setup-xcode-widget.js
+      - name: Build unsigned iOS Archive (.xcarchive)
+        script: |
+          set -e
+          cd ios/App
+          if [ -f "App.xcworkspace/contents.xcworkspacedata" ]; then
+            xcodebuild clean archive \
+              -workspace App.xcworkspace \
+              -scheme App \
+              -configuration Release \
+              -sdk iphoneos \
+              -archivePath $CM_BUILD_DIR/Masareef.xcarchive \
+              CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGNING_REQUIRED=NO \
+              CODE_SIGN_IDENTITY="" \
+              AD_HOC_CODE_SIGNING_ALLOWED=YES \
+              ENABLE_USER_SCRIPT_SANDBOXING=NO
+          else
+            xcodebuild clean archive \
+              -project App.xcodeproj \
+              -scheme App \
+              -configuration Release \
+              -sdk iphoneos \
+              -archivePath $CM_BUILD_DIR/Masareef.xcarchive \
+              CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGNING_REQUIRED=NO \
+              CODE_SIGN_IDENTITY="" \
+              AD_HOC_CODE_SIGNING_ALLOWED=YES \
+              ENABLE_USER_SCRIPT_SANDBOXING=NO
+          fi
+      - name: Package Unsigned .ipa from Archive
+        script: |
+          set -e
+          mkdir -p $CM_BUILD_DIR/ipa_build/Payload
+          APP_PATH=$(find $CM_BUILD_DIR/Masareef.xcarchive/Products/Applications -maxdepth 1 -name "*.app" | head -n 1)
+          echo "Found built app: $APP_PATH"
+          cp -R "$APP_PATH" "$CM_BUILD_DIR/ipa_build/Payload/"
+          cd $CM_BUILD_DIR/ipa_build
+          zip -r -y "$CM_BUILD_DIR/Masareef-unsigned.ipa" Payload
+          ls -lh "$CM_BUILD_DIR/Masareef-unsigned.ipa"
+    artifacts:
+      - $CM_BUILD_DIR/Masareef-unsigned.ipa
+      - $CM_BUILD_DIR/*.xcarchive
+      - /tmp/xcodebuild_logs/*.log
